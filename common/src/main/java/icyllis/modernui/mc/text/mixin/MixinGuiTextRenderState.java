@@ -82,6 +82,8 @@ public class MixinGuiTextRenderState {
             uniformScale = ctm.m00();
             if (MathUtil.isApproxEqual(uniformScale, 1)) {
                 mode = TextRenderType.MODE_NORMAL;
+            } else if (uniformScale > 0.001f && uniformScale < 1.0f) {
+                return font.prepareText(text, x, y, color, dropShadow, includeEmpty, backgroundColor);
             } else {
                 float upperLimit = Math.max(1.0f,
                         (float) TextLayoutEngine.sMinPixelDensityForSDF / layout.getCreatedResLevel());
