@@ -23,9 +23,11 @@ rootProject.name = 'ModernUI-MC'
 
 include 'common'
 
-include 'forge'
-project(':forge').name = "ModernUI-Forge"
-include 'neoforge'
-project(':neoforge').name = "ModernUI-NeoForge"
+if (!providers.gradleProperty('fabricOnly').isPresent()) {
+    include 'forge'
+    project(':forge').name = "ModernUI-Forge"
+    include 'neoforge'
+    project(':neoforge').name = "ModernUI-NeoForge"
+}
 include 'fabric'
 project(':fabric').name = "ModernUI-Fabric"

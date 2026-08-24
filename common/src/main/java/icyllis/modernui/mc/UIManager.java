@@ -60,13 +60,10 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
-import net.minecraft.client.gui.render.TextureSetup;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.tooltip.*;
-import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.state.gui.BlitRenderState;
 import net.minecraft.client.renderer.state.gui.GuiRenderState;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -126,6 +123,7 @@ public abstract class UIManager implements LifecycleOwner {
     private final Thread mUiThread;
     private volatile Looper mLooper;
     private volatile boolean mRunning;
+    private volatile boolean mFinishDispatched;
 
     // the view root impl
     protected volatile ViewRootImpl mRoot;
@@ -289,7 +287,7 @@ public abstract class UIManager implements LifecycleOwner {
                 minecraft.player.closeContainer();
             }
         } else {
-            minecraft.setScreen(screen.getPreviousScreen());
+            minecraft.gui.setScreen(screen.getPreviousScreen());
         }
     }
 
@@ -353,13 +351,14 @@ public abstract class UIManager implements LifecycleOwner {
                 LOGGER.warn(MARKER, "You cannot set multiple screens.");
                 return;
             }
-            mRoot.mHandler.post(this::suppressLayoutTransition);
-            mFragmentController.getFragmentManager().beginTransaction()
-                    .add(fragment_container, screen.getFragment(), "main")
-                    .setTransition(FragmentTransaction.TRANSIT_FRAGMENT_FADE)
-                    .setReorderingAllowed(true)
-                    .commit();
-            mRoot.mHandler.post(this::restoreLayoutTransition);
+            mRoot.mHandler.post(() -> {
+                suppressLayoutTransition();
+                mFragmentController.getFragmentManager().beginTransaction()
+                        .add(fragment_container, screen.getFragment(), "main")
+                        .setReorderingAllowed(true)
+                        .commitNow();
+                restoreLayoutTransition();
+            });
         }
         mScreen = screen;
         // ensure it's resized
@@ -483,6 +482,11 @@ public abstract class UIManager implements LifecycleOwner {
 
     @UiThread
     private void finish() {
+        if (mFinishDispatched) {
+            mLooper.quitSafely();
+            return;
+        }
+        mFinishDispatched = true;
         LOGGER.debug(MARKER, "Quiting UI thread");
 
         mFragmentController.dispatchStop();
@@ -491,9 +495,7 @@ public abstract class UIManager implements LifecycleOwner {
         mFragmentController.dispatchDestroy();
         mFragmentLifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY);
 
-        // must delay, some messages are not enqueued
-        // currently it is a bit longer than a game tick
-        mRoot.mHandler.postDelayed(mLooper::quitSafely, 60);
+        mLooper.quitSafely();
     }
 
     private void scheduleHoverMoveForScroll() {
@@ -558,7 +560,7 @@ public abstract class UIManager implements LifecycleOwner {
     public void onPostMouseInput(int button, int action, int mods) {
         // We should ensure (overlay == null && screen != null)
         // and the screen must be a mui screen
-        if (minecraft.getOverlay() == null && mScreen != null) {
+        if (minecraft.gui.overlay() == null && mScreen != null) {
             //ModernUI.LOGGER.info(MARKER, "Button: {} {} {}", event.getButton(), event.getAction(), event.getMods());
             final long now = Core.timeNanos();
             float x = (float) (minecraft.mouseHandler.xpos() *
@@ -813,7 +815,7 @@ public abstract class UIManager implements LifecycleOwner {
 
             } catch (IllegalAccessException | InvocationTargetException ignored) {
             }*/
-            minecraft.gui.getChat().addClientSystemMessage(Component.literal(str).withStyle(ChatFormatting.GRAY));
+            minecraft.gui.hud.getChat().addClientSystemMessage(Component.literal(str).withStyle(ChatFormatting.GRAY));
         }
         LOGGER.info(MARKER, str);
     }
@@ -839,7 +841,7 @@ public abstract class UIManager implements LifecycleOwner {
             pw.println((Object) null);
         }
 
-        Screen screen = minecraft.screen;
+        Screen screen = minecraft.gui.screen();
         if (screen != null) {
             pw.print("Screen: ");
             pw.println(screen.getClass());
@@ -920,6 +922,7 @@ public abstract class UIManager implements LifecycleOwner {
         Recording recording = frameTask.getLeft();
         @SharedPtr
         ImageProxy surface = frameTask.getRight();
+        Object image = surface != null ? surface.getImage() : null;
 
         if (recording != null) {
             boolean added = context.addTask(recording);
@@ -951,7 +954,7 @@ public abstract class UIManager implements LifecycleOwner {
             GL33C.glDisable(GL33C.GL_SCISSOR_TEST);
             GlStateManager._blendFuncSeparate(GL33C.GL_SRC_ALPHA, GL33C.GL_ONE_MINUS_SRC_ALPHA, GL33C.GL_ONE, GL33C.GL_ZERO);
             GL33C.glBlendFuncSeparate(GL33C.GL_SRC_ALPHA, GL33C.GL_ONE_MINUS_SRC_ALPHA, GL33C.GL_ONE, GL33C.GL_ZERO);
-            GlStateManager._enableBlend();
+            GlStateManager._enableBlend(0);
             GL33C.glEnable(GL33C.GL_BLEND);
             GL33C.glBlendEquation(GL33C.GL_FUNC_ADD);
             GlStateManager._disableDepthTest();
@@ -974,7 +977,7 @@ public abstract class UIManager implements LifecycleOwner {
 
 
         if (surface != null) {
-            if (surface.getImage() instanceof @RawPtr GLTexture layer) {
+            if (image instanceof @RawPtr GLTexture layer) {
                 // draw off-screen target to Minecraft mainTarget (not the default framebuffer)
                 if (mLayerTexture == null || mLayerTexture.source != layer) {
                     if (mLayerTexture != null) {
@@ -990,17 +993,11 @@ public abstract class UIManager implements LifecycleOwner {
                     mLayerTexture.touch();
                 }
                 gr.nextStratum();
-                MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
-                        // render target is always premultiplied
-                        RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA,
-                        // using the nearest sampler is performant
-                        TextureSetup.singleTexture(mLayerTextureView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
-                        new Matrix3x2f().scale(1.0F / minecraft.getWindow().getGuiScale()),
-                        0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(),
-                        0.0F, 1.0F, 0.0F, 1.0F,
-                        ~0,
-                        /*scissorArea*/ null
-                ));
+                gr.blit(mLayerTextureView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
+                        0, 0,
+                        minecraft.getWindow().getGuiScaledWidth(),
+                        minecraft.getWindow().getGuiScaledHeight(),
+                        0.0F, 1.0F, 0.0F, 1.0F);
             } else if (surface.getImage() instanceof @RawPtr VulkanImage layer) {
                 if (ModernUIMod.isVulkanModLoaded()) {
                     if (mLayerTexture_Vulkan == null || !VulkanModIntegration.sameImage(mLayerTexture_Vulkan, layer)) {
@@ -1016,17 +1013,11 @@ public abstract class UIManager implements LifecycleOwner {
                     layer.refCommandBuffer();
                     VulkanModIntegration.syncImageLayoutFromArc3D(mLayerTexture_Vulkan, layer);
                     gr.nextStratum();
-                    MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
-                            // render target is always premultiplied
-                            RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA,
-                            // using the nearest sampler is performant
-                            TextureSetup.singleTexture(mLayerTextureView_Vulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
-                            new Matrix3x2f().scale(1.0F / minecraft.getWindow().getGuiScale()),
-                            0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(),
-                            0.0F, 1.0F, 0.0F, 1.0F,
-                            ~0,
-                            /*scissorArea*/ null
-                    ));
+                    gr.blit(mLayerTextureView_Vulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
+                            0, 0,
+                            minecraft.getWindow().getGuiScaledWidth(),
+                            minecraft.getWindow().getGuiScaledHeight(),
+                            0.0F, 1.0F, 0.0F, 1.0F);
                     VulkanModIntegration.addFrameOp(layer::unrefCommandBuffer);
                 }
                 mLastSubmittedVulkanLayer = layer;
@@ -1070,12 +1061,14 @@ public abstract class UIManager implements LifecycleOwner {
             LOGGER.warn(MARKER, "No screen to remove, try to remove {}, but have {}", target, screen);
             return;
         }
-        mRoot.mHandler.post(this::suppressLayoutTransition);
-        mFragmentController.getFragmentManager().beginTransaction()
-                .remove(screen.getFragment())
-                .setReorderingAllowed(true)
-                .commit();
-        mRoot.mHandler.post(this::restoreLayoutTransition);
+        mRoot.mHandler.post(() -> {
+            suppressLayoutTransition();
+            mFragmentController.getFragmentManager().beginTransaction()
+                    .remove(screen.getFragment())
+                    .setReorderingAllowed(true)
+                    .commitNow();
+            restoreLayoutTransition();
+        });
         mRoot.mRawDrawHandlers.clear();
         mScreen = null;
         glfwSetCursor(minecraft.getWindow().handle(), MemoryUtil.NULL);
@@ -1132,8 +1125,14 @@ public abstract class UIManager implements LifecycleOwner {
 
     public void renderAbove(GuiRenderState guiRenderState) {
         if (minecraft.isRunning() && mRunning &&
-                mScreen == null && minecraft.getOverlay() == null) {
+                mScreen == null && minecraft.gui.overlay() == null) {
             // Render the UI above everything
+            render(new GuiGraphicsExtractor(minecraft, guiRenderState, 0, 0), 0, 0, 0);
+        }
+    }
+
+    public void renderScreenLayer(GuiRenderState guiRenderState) {
+        if (minecraft.isRunning() && mRunning && mScreen != null) {
             render(new GuiGraphicsExtractor(minecraft, guiRenderState, 0, 0), 0, 0, 0);
         }
     }
@@ -1218,7 +1217,7 @@ public abstract class UIManager implements LifecycleOwner {
                     sb.appendCodePoint(cp++);
                 }
                 mTestCodepoint = end;
-                minecraft.gui.getChat().addClientSystemMessage(Component.literal(sb.toString()));
+                minecraft.gui.hud.getChat().addClientSystemMessage(Component.literal(sb.toString()));
             }
         }
     }
@@ -1234,6 +1233,12 @@ public abstract class UIManager implements LifecycleOwner {
         if (sInstance != null) {
             AudioManager.getInstance().close();
             try {
+                sInstance.mRunning = false;
+                if (sInstance.mRoot != null) {
+                    sInstance.mRoot.mHandler.post(sInstance::finish);
+                } else if (sInstance.mLooper != null) {
+                    sInstance.mLooper.quitSafely();
+                }
                 // in case of GLFW is terminated too early
                 sInstance.mUiThread.join(1000);
             } catch (InterruptedException e) {
@@ -1325,6 +1330,7 @@ public abstract class UIManager implements LifecycleOwner {
         @Override
         protected Canvas beginDrawLocked(int width, int height) {
             synchronized (mRenderLock) {
+                boolean recreated = false;
                 if (mSurface == null ||
                         mSurface.getWidth() != width ||
                         mSurface.getHeight() != height) {
@@ -1338,6 +1344,7 @@ public abstract class UIManager implements LifecycleOwner {
                                 Engine.SurfaceOrigin.kUpperLeft,
                                 null
                         ));
+                        recreated = true;
                     }
                 }
                 if (mSurface != null && width > 0 && height > 0) {
@@ -1357,10 +1364,13 @@ public abstract class UIManager implements LifecycleOwner {
                     mLastFrameTask.close();
                 }
                 mLastFrameTask = task;
-                try {
-                    mRenderLock.wait();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
+                while (mLastFrameTask == task && mRunning && minecraft.isRunning()) {
+                    try {
+                        mRenderLock.wait(50);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
                 if (mLastFrameTask != null) {
                     mLastFrameTask.close();
