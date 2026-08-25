@@ -53,6 +53,7 @@ public class MixinRenderSystem {
     private static void onInitRenderer(GpuDevice device, CallbackInfo ci) {
         Core.initialize();
         ContextOptions options = new ContextOptions();
+        options.mDepthClipNegativeOneToOne = false;
         String value = ModernUIClient.getBootstrapProperty(ModernUIClient.BOOTSTRAP_USE_STAGING_BUFFERS_IN_OPENGL);
         if (value != null) {
             options.mUseStagingBuffers = Boolean.parseBoolean(value);
@@ -62,7 +63,7 @@ public class MixinRenderSystem {
             options.mAllowGLSPIRV = Boolean.parseBoolean(value);
         }
         options.mDriverBugWorkarounds = ModernUIClient.getGpuDriverBugWorkarounds();
-        switch (device.getBackendName()) {
+        switch (device.getDeviceInfo().backendName()) {
             case "OpenGL" -> {
                 if (!Core.initOpenGL(options)) {
                     throw new IllegalStateException("Failed to create OpenGL device");
