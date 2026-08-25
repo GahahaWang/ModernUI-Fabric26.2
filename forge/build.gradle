@@ -124,6 +124,8 @@ dependencies {
 
     //shadow "io.reactivex.rxjava3:rxjava:${rxjava_version}"
 
+    shadow ':ModernUI-Fonts-5.0'
+
     /*implementation('org.apache.maven:maven-artifact') {
         version {
             strictly '3.6.3'
@@ -152,12 +154,6 @@ sourcesJar {
 
 tasks.withType(ProcessResources).configureEach {
     from project(":common").sourceSets.main.resources
-}
-
-tasks.named('processResources') {
-    from(zipTree(rootProject.file('libs/ModernUI-Fonts-5.0.jar'))) {
-        include 'assets/**'
-    }
 }
 
 test {
