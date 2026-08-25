@@ -60,9 +60,34 @@ public abstract class TextRenderType {
      */
     public static final int MODE_UNIFORM_SCALE = 4; // <- must be power of 2
 
-    public static final RenderPipeline.Snippet PIPELINE_SNIPPET = RenderPipeline.builder()
+    /*
+     * The world and the GUI bind their resources through completely different paths, so the
+     * two families of pipelines must declare completely different bind group layouts.
+     *
+     * In the world, a RenderType goes through RenderSetup, and the bind groups are bound by
+     * declaration order, so the layout has to match RenderPipelines.WORLD_TEXT_SNIPPET
+     * exactly (GLOBALS, MATRICES_PROJECTION, SAMPLER0, FOG, SAMPLER2). Anything else and the
+     * shader reads the wrong buffers: the transform matrices come out as garbage and the
+     * geometry lands nowhere, silently, without a shader or validation error.
+     *
+     * In the GUI, the resources come from GuiRenderState and TextureSetup, which supplies
+     * Sampler0 and the lightmap as a single combined group.
+     */
+
+    public static final RenderPipeline.Snippet WORLD_SNIPPET = RenderPipeline.builder()
             .withVertexShader(Identifier.withDefaultNamespace("core/text"))
-            .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_normal"))
+            .withBindGroupLayout(BindGroupLayouts.GLOBALS)
+            .withBindGroupLayout(BindGroupLayouts.MATRICES_PROJECTION)
+            .withBindGroupLayout(BindGroupLayouts.SAMPLER0)
+            .withBindGroupLayout(BindGroupLayouts.FOG)
+            .withBindGroupLayout(BindGroupLayouts.SAMPLER2)
+            .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
+            .withVertexBinding(0, DefaultVertexFormat.POSITION_TEX_LIGHTMAP_COLOR)
+            .withPrimitiveTopology(PrimitiveTopology.QUADS)
+            .buildSnippet();
+
+    public static final RenderPipeline.Snippet GUI_SNIPPET = RenderPipeline.builder()
+            .withVertexShader(Identifier.withDefaultNamespace("core/text"))
             .withBindGroupLayout(BindGroupLayouts.FOG)
             .withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
             .withBindGroupLayout(BindGroupLayouts.PROJECTION)
@@ -70,46 +95,36 @@ public abstract class TextRenderType {
             .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
             .withVertexBinding(0, DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP)
             .withPrimitiveTopology(PrimitiveTopology.QUADS)
+            .withShaderDefine("IS_GUI")
             .buildSnippet();
 
-    public static final RenderPipeline PIPELINE_NORMAL = RenderPipeline.builder(PIPELINE_SNIPPET)
+    public static final RenderPipeline PIPELINE_NORMAL = RenderPipeline.builder(WORLD_SNIPPET)
             .withLocation(ModernUIMod.location("pipeline/modern_text_normal"))
+            .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_normal"))
             .withDepthStencilState(DepthStencilState.DEFAULT)
             .build();
 
-    public static final RenderPipeline PIPELINE_GUI_NORMAL = RenderPipeline.builder(PIPELINE_SNIPPET)
+    public static final RenderPipeline PIPELINE_GUI_NORMAL = RenderPipeline.builder(GUI_SNIPPET)
             .withLocation(ModernUIMod.location("pipeline/modern_text_gui_normal"))
-            .withShaderDefine("IS_GUI")
+            .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_normal"))
             .withDepthStencilState(Optional.empty())
             .build();
 
-    public static final RenderPipeline.Snippet PIPELINE_SDF_SNIPPET = RenderPipeline.builder()
-            .withVertexShader(Identifier.withDefaultNamespace("core/text"))
-            .withBindGroupLayout(BindGroupLayouts.FOG)
-            .withBindGroupLayout(BindGroupLayouts.DYNAMIC_TRANSFORMS)
-            .withBindGroupLayout(BindGroupLayouts.PROJECTION)
-            .withBindGroupLayout(BindGroupLayouts.SAMPLER0_SAMPLER2)
-            .withColorTargetState(new ColorTargetState(BlendFunction.TRANSLUCENT))
-            .withVertexBinding(0, DefaultVertexFormat.POSITION_COLOR_TEX_LIGHTMAP)
-            .withPrimitiveTopology(PrimitiveTopology.QUADS)
-            .buildSnippet();
-
-    public static final RenderPipeline PIPELINE_SDF_FILL = RenderPipeline.builder(PIPELINE_SDF_SNIPPET)
+    public static final RenderPipeline PIPELINE_SDF_FILL = RenderPipeline.builder(WORLD_SNIPPET)
             .withLocation(ModernUIMod.location("pipeline/modern_text_sdf_fill"))
             .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_sdf_fill"))
-            .withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, true, -1.0F, -10.0F))
+            .withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true, 1.0F, 10.0F))
             .build();
 
-    public static final RenderPipeline PIPELINE_SDF_STROKE = RenderPipeline.builder(PIPELINE_SDF_SNIPPET)
+    public static final RenderPipeline PIPELINE_SDF_STROKE = RenderPipeline.builder(WORLD_SNIPPET)
             .withLocation(ModernUIMod.location("pipeline/modern_text_sdf_stroke"))
             .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_sdf_stroke"))
-            .withDepthStencilState(new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, true, -1.0F, -10.0F))
+            .withDepthStencilState(new DepthStencilState(CompareOp.GREATER_THAN_OR_EQUAL, true, 1.0F, 10.0F))
             .build();
 
-    public static final RenderPipeline PIPELINE_GUI_SDF = RenderPipeline.builder(PIPELINE_SDF_SNIPPET)
+    public static final RenderPipeline PIPELINE_GUI_SDF = RenderPipeline.builder(GUI_SNIPPET)
             .withLocation(ModernUIMod.location("pipeline/modern_text_gui_sdf"))
             .withFragmentShader(ModernUIMod.location("core/rendertype_modern_text_sdf_fill"))
-            .withShaderDefine("IS_GUI")
             .withDepthStencilState(Optional.empty())
             .build();
 
@@ -368,6 +383,8 @@ public abstract class TextRenderType {
             assert (sSDFFillTypes.isEmpty());
             sFirstSDFFillType = renderType;
         }
+        // one line per atlas, this is the entry point of world text rendering
+        LOGGER.info(MARKER, "Created SDF fill render type for {}", texture);
         return renderType;
     }
 
