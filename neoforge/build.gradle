@@ -97,6 +97,7 @@ dependencies {
     include "com.vladsch.flexmark:flexmark-util-visitor:${flexmark_version}"*/
     include "org.commonmark:commonmark:${commonmark_version}"
 
+    shadow ':ModernUI-Fonts-5.0'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -113,16 +114,6 @@ sourcesJar {
 
 tasks.withType(ProcessResources).configureEach {
     from project(":common").sourceSets.main.resources
-}
-
-// The emoji images and the bundled fonts ship in a plain asset jar. Merging them into the
-// mod's own resources puts them on the runtime classpath of a development client too; the
-// shadow configuration only ever reached the universal jar, which is why runClient logged
-// "No Emoji font was found".
-tasks.named('processResources') {
-    from(zipTree(rootProject.file('libs/ModernUI-Fonts-5.0.jar'))) {
-        include 'assets/**'
-    }
 }
 
 test {
