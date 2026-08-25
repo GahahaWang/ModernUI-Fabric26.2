@@ -8,6 +8,7 @@
   "client": [
     "AccessGuiTextRenderState",
     "AccessFontManager",
+    "AccessRenderTypeFeatureRenderer",
     "MixinActiveTextCollector",
     "MixinBidiReorder",
     "MixinClientLanguage",
@@ -20,6 +21,7 @@
     "MixinGuiRenderer",
     "MixinGuiTextRenderState",
     "MixinLanguage",
+    "MixinNameTagFeatureRenderer",
     "MixinTextFeatureRenderer"
   ]
 }
