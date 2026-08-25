@@ -383,8 +383,6 @@ public abstract class TextRenderType {
             assert (sSDFFillTypes.isEmpty());
             sFirstSDFFillType = renderType;
         }
-        // one line per atlas, this is the entry point of world text rendering
-        LOGGER.info(MARKER, "Created SDF fill render type for {}", texture);
         return renderType;
     }
 
