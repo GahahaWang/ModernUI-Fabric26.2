@@ -320,6 +320,38 @@ public class TextLayout {
     }
 
     /**
+     * Special version for world (3D) text rendering, see
+     * {@link net.minecraft.client.renderer.feature.TextFeatureRenderer}.
+     *
+     * @param preferredMode a render mode, normal, see through or SDF
+     */
+    public ModernWorldPreparedText prepareWorldText(float x, float top,
+                                                    int color, boolean dropShadow,
+                                                    int preferredMode, int bgColor) {
+        final float density;
+        final BakedGlyph[] glyphs;
+        if (preferredMode == TextRenderType.MODE_SDF_FILL) {
+            int resLevel = TextLayoutEngine.adjustPixelDensityForSDF(mCreatedResLevel);
+            glyphs = getGlyphs(resLevel);
+            density = resLevel;
+        } else {
+            glyphs = getGlyphs(mCreatedResLevel);
+            density = mCreatedResLevel;
+        }
+        return new ModernWorldPreparedText(this, glyphs, density, x, top,
+                color, dropShadow, preferredMode, bgColor);
+    }
+
+    /**
+     * The glowing outline of {@link #prepareWorldText}, drawn as a single SDF stroke
+     * pass rather than vanilla's eight offset copies.
+     */
+    public ModernWorldPreparedText prepareWorldTextOutline(float x, float top, int outlineColor) {
+        int resLevel = TextLayoutEngine.adjustPixelDensityForSDF(mCreatedResLevel);
+        return new ModernWorldPreparedText(this, getGlyphs(resLevel), resLevel, x, top, outlineColor);
+    }
+
+    /**
      * The copied text buffer without formatting codes in logical order.
      */
     @Nonnull

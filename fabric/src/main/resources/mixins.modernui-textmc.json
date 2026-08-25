@@ -19,6 +19,7 @@
     "MixinGameRenderer",
     "MixinGuiRenderer",
     "MixinGuiTextRenderState",
-    "MixinLanguage"
+    "MixinLanguage",
+    "MixinTextFeatureRenderer"
   ]
 }
