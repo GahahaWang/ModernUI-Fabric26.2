@@ -4,3 +4,5 @@ accessible class net/minecraft/client/OptionInstance$SliderableOrCyclableValueSe
 accessible class net/minecraft/client/gui/GuiGraphicsExtractor$ScissorStack
 accessible class net/minecraft/client/gui/font/FontManager$CachedFontProvider
 accessible field com/mojang/blaze3d/systems/GpuDevice backend Lcom/mojang/blaze3d/systems/GpuDeviceBackend;
+accessible field com/mojang/blaze3d/vulkan/VulkanGpuTextureView vkImageView J
+mutable field com/mojang/blaze3d/vulkan/VulkanGpuTextureView vkImageView J
