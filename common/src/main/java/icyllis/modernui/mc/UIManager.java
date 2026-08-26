@@ -45,6 +45,7 @@ import icyllis.modernui.graphics.pipeline.ArcCanvas;
 import icyllis.modernui.graphics.text.LayoutCache;
 import icyllis.modernui.lifecycle.*;
 import icyllis.modernui.mc.b3d.GlTexture_Wrapped;
+import icyllis.modernui.mc.b3d.VulkanTexture_Wrapped;
 import icyllis.modernui.mc.text.GlyphManager;
 import icyllis.modernui.mc.text.TextLayoutEngine;
 import icyllis.modernui.resources.TypedValue;
@@ -162,6 +163,9 @@ public abstract class UIManager implements LifecycleOwner {
 
     private GpuTexture mLayerTexture_Vulkan;
     private GpuTextureView mLayerTextureView_Vulkan;
+
+    private VulkanTexture_Wrapped mLayerTexture_VanillaVulkan;
+    private GpuTextureView mLayerTextureView_VanillaVulkan;
 
     @RawPtr
     private VulkanImage mLastSubmittedVulkanLayer;
@@ -1019,6 +1023,29 @@ public abstract class UIManager implements LifecycleOwner {
                             minecraft.getWindow().getGuiScaledHeight(),
                             0.0F, 1.0F, 0.0F, 1.0F);
                     VulkanModIntegration.addFrameOp(layer::unrefCommandBuffer);
+                } else {
+                    // Minecraft's own Vulkan backend, same shape as the OpenGL branch;
+                    // it keeps every image in VK_IMAGE_LAYOUT_GENERAL for its whole life,
+                    // so there is no layout to synchronize here
+                    if (mLayerTexture_VanillaVulkan == null || mLayerTexture_VanillaVulkan.source != layer) {
+                        if (mLayerTexture_VanillaVulkan != null) {
+                            mLayerTextureView_VanillaVulkan.close();
+                            mLayerTexture_VanillaVulkan.close();
+                        }
+                        layer.ref();
+                        mLayerTexture_VanillaVulkan = new VulkanTexture_Wrapped(layer); // move
+                        mLayerTextureView_VanillaVulkan = RenderSystem.getDevice()
+                                .createTextureView(mLayerTexture_VanillaVulkan);
+                    } else {
+                        // ensure there's ref before submitting to the GPU
+                        mLayerTexture_VanillaVulkan.touch();
+                    }
+                    gr.nextStratum();
+                    gr.blit(mLayerTextureView_VanillaVulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
+                            0, 0,
+                            minecraft.getWindow().getGuiScaledWidth(),
+                            minecraft.getWindow().getGuiScaledHeight(),
+                            0.0F, 1.0F, 0.0F, 1.0F);
                 }
                 mLastSubmittedVulkanLayer = layer;
             }
@@ -1170,6 +1197,9 @@ public abstract class UIManager implements LifecycleOwner {
                 // we can drop the ref after submitting to the GPU
                 mLayerTexture.close();
             }
+            if (mLayerTexture_VanillaVulkan != null) {
+                mLayerTexture_VanillaVulkan.close();
+            }
             if (mLayerTexture_Vulkan != null && mLastSubmittedVulkanLayer != null) {
                 if (ModernUIMod.isVulkanModLoaded()) {
                     VulkanModIntegration.syncImageLayoutFromVulkan(mLayerTexture_Vulkan, mLastSubmittedVulkanLayer);
@@ -1188,6 +1218,11 @@ public abstract class UIManager implements LifecycleOwner {
                     mLayerTexture_Vulkan = null;
                     mLayerTextureView_Vulkan.close();
                     mLayerTextureView_Vulkan = null;
+                }
+                if (mLayerTexture_VanillaVulkan != null) {
+                    mLayerTextureView_VanillaVulkan.close();
+                    mLayerTextureView_VanillaVulkan = null;
+                    mLayerTexture_VanillaVulkan = null;
                 }
                 // later destroy() will be called
             }
