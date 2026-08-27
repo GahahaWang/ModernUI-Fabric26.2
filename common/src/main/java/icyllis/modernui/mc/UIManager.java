@@ -61,10 +61,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.MouseHandler;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.gui.render.TextureSetup;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.inventory.tooltip.*;
-import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.state.gui.BlitRenderState;
+import net.minecraft.client.renderer.state.gui.GuiRenderState;
 import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -206,6 +209,11 @@ public abstract class UIManager implements LifecycleOwner {
         //MuiModApi.addOnScrollListener(this::onScroll);
         MuiModApi.addOnScreenChangeListener(this::onScreenChange);
         MuiModApi.addOnWindowResizeListener((width, height, guiScale, oldGuiScale) -> resize(width, height));
+        MuiModApi.addOnWindowResizeListener((width, height, guiScale, oldGuiScale) -> {
+            if (guiScale != oldGuiScale) {
+                onDensityChanged();
+            }
+        });
         MuiModApi.addOnPreKeyInputListener((window, action, event) -> {
             if (window == minecraft.getWindow().handle()) {
                 onPreKeyInput(action, event);
@@ -997,11 +1005,17 @@ public abstract class UIManager implements LifecycleOwner {
                     mLayerTexture.touch();
                 }
                 gr.nextStratum();
-                gr.blit(mLayerTextureView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
-                        0, 0,
-                        minecraft.getWindow().getGuiScaledWidth(),
-                        minecraft.getWindow().getGuiScaledHeight(),
-                        0.0F, 1.0F, 0.0F, 1.0F);
+                MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
+                        // render target is always premultiplied
+                        RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA,
+                        // using the nearest sampler is performant
+                        TextureSetup.singleTexture(mLayerTextureView, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
+                        new Matrix3x2f().scale(1.0F / minecraft.getWindow().getGuiScale()),
+                        0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(),
+                        0.0F, 1.0F, 0.0F, 1.0F,
+                        ~0,
+                        /*scissorArea*/ null
+                ));
             } else if (surface.getImage() instanceof @RawPtr VulkanImage layer) {
                 if (ModernUIMod.isVulkanModLoaded()) {
                     if (mLayerTexture_Vulkan == null || !VulkanModIntegration.sameImage(mLayerTexture_Vulkan, layer)) {
@@ -1017,12 +1031,19 @@ public abstract class UIManager implements LifecycleOwner {
                     layer.refCommandBuffer();
                     VulkanModIntegration.syncImageLayoutFromArc3D(mLayerTexture_Vulkan, layer);
                     gr.nextStratum();
-                    gr.blit(mLayerTextureView_Vulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
-                            0, 0,
-                            minecraft.getWindow().getGuiScaledWidth(),
-                            minecraft.getWindow().getGuiScaledHeight(),
-                            0.0F, 1.0F, 0.0F, 1.0F);
+                    MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
+                            // render target is always premultiplied
+                            RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA,
+                            // using the nearest sampler is performant
+                            TextureSetup.singleTexture(mLayerTextureView_Vulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
+                            new Matrix3x2f().scale(1.0F / minecraft.getWindow().getGuiScale()),
+                            0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(),
+                            0.0F, 1.0F, 0.0F, 1.0F,
+                            ~0,
+                            /*scissorArea*/ null
+                    ));
                     VulkanModIntegration.addFrameOp(layer::unrefCommandBuffer);
+                    mLastSubmittedVulkanLayer = layer;
                 } else {
                     // Minecraft's own Vulkan backend, same shape as the OpenGL branch;
                     // it keeps every image in VK_IMAGE_LAYOUT_GENERAL for its whole life,
@@ -1041,13 +1062,18 @@ public abstract class UIManager implements LifecycleOwner {
                         mLayerTexture_VanillaVulkan.touch();
                     }
                     gr.nextStratum();
-                    gr.blit(mLayerTextureView_VanillaVulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST),
-                            0, 0,
-                            minecraft.getWindow().getGuiScaledWidth(),
-                            minecraft.getWindow().getGuiScaledHeight(),
-                            0.0F, 1.0F, 0.0F, 1.0F);
+                    MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
+                            // render target is always premultiplied
+                            RenderPipelines.GUI_TEXTURED_PREMULTIPLIED_ALPHA,
+                            // using the nearest sampler is performant
+                            TextureSetup.singleTexture(mLayerTextureView_VanillaVulkan, RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST)),
+                            new Matrix3x2f().scale(1.0F / minecraft.getWindow().getGuiScale()),
+                            0, 0, minecraft.getWindow().getWidth(), minecraft.getWindow().getHeight(),
+                            0.0F, 1.0F, 0.0F, 1.0F,
+                            ~0,
+                            /*scissorArea*/ null
+                    ));
                 }
-                mLastSubmittedVulkanLayer = layer;
             }
         }
         RefCnt.move(surface);
@@ -1067,6 +1093,39 @@ public abstract class UIManager implements LifecycleOwner {
         if (mRoot != null) {
             mRoot.mHandler.post(() -> mRoot.setFrame(width, height));
         }
+    }
+
+    /**
+     * Called when the GUI scale changed.
+     */
+    @MainThread
+    void onDensityChanged() {
+        if (mRoot == null) {
+            return;
+        }
+        mRoot.mHandler.post(() -> {
+            if (mDecor != null) {
+                mDecor.requestLayout();
+            }
+            var controller = mFragmentController;
+            if (controller == null) {
+                return;
+            }
+            var fm = controller.getFragmentManager();
+            var fragment = fm.findFragmentByTag("main");
+            if (fragment == null) {
+                return;
+            }
+            suppressLayoutTransition();
+            // two transactions, a single reordered one would cancel the pair out
+            fm.beginTransaction()
+                    .detach(fragment)
+                    .commitNow();
+            fm.beginTransaction()
+                    .attach(fragment)
+                    .commitNow();
+            restoreLayoutTransition();
+        });
     }
 
     @UiThread

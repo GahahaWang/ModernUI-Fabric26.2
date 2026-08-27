@@ -138,9 +138,7 @@ public final class UIManagerForge extends UIManager implements LifecycleOwner {
     protected void onPreKeyInput(int action, KeyEvent event) {
         if (action == GLFW_PRESS) {
             Screen screen = minecraft.gui.screen();
-            if (screen == null ||
-                    screen.shouldCloseOnEsc() ||
-                    screen instanceof TitleScreen) {
+            if (screen == null || screen instanceof TitleScreen) {
                 InputConstants.Key key = InputConstants.getKey(event);
                 if (OPEN_CENTER_KEY.isActiveAndMatches(key)) {
                     open(new CenterFragment2());
