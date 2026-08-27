@@ -95,10 +95,8 @@ public final class UIManagerFabric extends UIManager {
     protected void onPreKeyInput(int action, KeyEvent event) {
         if (action == GLFW_PRESS) {
             Screen screen = minecraft.gui.screen();
-            if (screen == null ||
-                    screen.shouldCloseOnEsc() ||
-                    screen instanceof TitleScreen) {
-                if (event.hasControlDownWithQuirk() && OPEN_CENTER_KEY.matches(event)) {
+            if (screen == null || screen instanceof TitleScreen) {
+                if (OPEN_CENTER_KEY.matches(event)) {
                     open(new CenterFragment2());
                     return;
                 }
