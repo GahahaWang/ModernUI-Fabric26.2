@@ -26,10 +26,12 @@ import com.mojang.blaze3d.vulkan.VulkanGpuTextureView;
 import icyllis.arc3d.engine.Swizzle;
 import icyllis.arc3d.vulkan.VKUtil;
 import icyllis.arc3d.vulkan.VulkanBackendContext;
+import icyllis.arc3d.vulkan.VulkanImage;
 import icyllis.arc3d.vulkan.VulkanMemoryAllocator;
 import icyllis.modernui.core.VulkanManager;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkImageMemoryBarrier;
 import org.lwjgl.vulkan.VkImageViewCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDeviceFeatures2;
 import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
@@ -38,6 +40,8 @@ import javax.annotation.Nonnull;
 import java.nio.LongBuffer;
 
 public final class VanillaVulkanIntegration {
+
+    private static final java.util.List<Runnable[]> sPendingFrameOps = new java.util.ArrayList<>();
 
     private VanillaVulkanIntegration() {
     }
@@ -77,6 +81,99 @@ public final class VanillaVulkanIntegration {
         backendContext.mMemoryAllocator = vulkanManager.getMemoryAllocator();
 
         return backendContext;
+    }
+
+    /**
+     * Run {@code op} once the frame it belongs to has retired, the counterpart of
+     * VulkanMod's frame op queue.
+     * <p>
+     * Blaze3D keeps several frames in flight, so handing it a resource and submitting is
+     * not the end of the story: its command buffers still reference that resource well
+     * after the submit returns. This is how we hold on to one for exactly that long.
+     */
+    public static void addFrameOp(@Nonnull Runnable op) {
+        // Keep our own handle on it as well. Blaze3D drains this queue as its frames retire,
+        // but it tears the device down without waiting for it, and anything still queued
+        // then is simply leaked, see flushFrameOps().
+        final Runnable[] holder = {op};
+        synchronized (sPendingFrameOps) {
+            sPendingFrameOps.add(holder);
+        }
+        ((VulkanDevice) RenderSystem.getDevice().backend)
+                .createCommandEncoder()
+                .queueForDestroy(() -> runFrameOp(holder));
+    }
+
+    private static void runFrameOp(@Nonnull Runnable[] holder) {
+        Runnable op;
+        synchronized (sPendingFrameOps) {
+            sPendingFrameOps.remove(holder);
+            op = holder[0];
+            holder[0] = null;
+        }
+        if (op != null) {
+            op.run();
+        }
+    }
+
+    /**
+     * Run every frame op Blaze3D has not got round to. Called on the way out, before the
+     * device goes away, so that we do not leave child objects behind it.
+     */
+    public static void flushFrameOps() {
+        Object[] pending;
+        synchronized (sPendingFrameOps) {
+            pending = sPendingFrameOps.toArray();
+        }
+        for (Object o : pending) {
+            runFrameOp((Runnable[]) o);
+        }
+    }
+
+    /**
+     * Move the Arc3D layer image into the layout Blaze3D assumes for everything it samples,
+     * and record that in Arc3D's own tracking so it does not transition from a stale value.
+     * <p>
+     * This is the vanilla counterpart of VulkanMod's syncImageLayout pair, but it has to do
+     * more than bookkeeping. VulkanMod tracks image layouts and emits its own barriers once
+     * it is told the truth; Blaze3D tracks nothing and assumes VK_IMAGE_LAYOUT_GENERAL
+     * everywhere, so the transition has to actually happen here. Arc3D leaves the layer in
+     * VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL after drawing into it, and sampling it as
+     * GENERAL is VUID-vkCmdDraw-None-09600.
+     */
+    public static void syncImageLayoutToVanilla(@Nonnull VulkanImage image) {
+        var state = image.getVulkanMutableState();
+        final int oldLayout = state.getImageLayout();
+        if (oldLayout == VK10.VK_IMAGE_LAYOUT_GENERAL) {
+            return;
+        }
+        var encoder = ((VulkanDevice) RenderSystem.getDevice().backend).createCommandEncoder();
+        var commandBuffer = encoder.allocateAndBeginTransientCommandBuffer();
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkImageMemoryBarrier.Buffer barrier = VkImageMemoryBarrier.calloc(1, stack)
+                    .sType$Default()
+                    .srcAccessMask(VK10.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)
+                    .dstAccessMask(VK10.VK_ACCESS_SHADER_READ_BIT)
+                    .oldLayout(oldLayout)
+                    .newLayout(VK10.VK_IMAGE_LAYOUT_GENERAL)
+                    .srcQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                    .dstQueueFamilyIndex(VK10.VK_QUEUE_FAMILY_IGNORED)
+                    .image(image.vkImage());
+            barrier.subresourceRange()
+                    .aspectMask(VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                    .baseMipLevel(0)
+                    .levelCount(image.getMipLevelCount())
+                    .baseArrayLayer(0)
+                    .layerCount(1);
+            VK10.vkCmdPipelineBarrier(commandBuffer,
+                    VK10.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK10.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                    0, null, null, barrier);
+        }
+        // execute() ends the encoder's own buffer, not the transient one it is handed
+        VKUtil._CHECK_(VK10.vkEndCommandBuffer(commandBuffer));
+        encoder.execute(commandBuffer);
+        state.setImageLayout(VK10.VK_IMAGE_LAYOUT_GENERAL);
     }
 
     /**

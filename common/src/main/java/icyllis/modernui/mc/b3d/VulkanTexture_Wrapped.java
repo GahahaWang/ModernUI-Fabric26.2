@@ -24,6 +24,7 @@ import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanGpuTexture;
 import icyllis.arc3d.core.SharedPtr;
 import icyllis.arc3d.vulkan.VulkanImage;
+import icyllis.modernui.mc.VanillaVulkanIntegration;
 import org.lwjgl.util.vma.Vma;
 import org.lwjgl.vulkan.VK10;
 
@@ -48,11 +49,17 @@ public class VulkanTexture_Wrapped extends VulkanGpuTexture {
         assert source.getSampleCount() == 1;
 
         var device = (VulkanDevice) RenderSystem.getDevice().backend;
-        // the super constructor allocated an image of its own, we only wanted the
-        // GpuTexture bookkeeping around it
-        Vma.vmaDestroyImage(device.vma(), vkImage, vmaAllocation);
+        // The super constructor allocated an image of its own, we only wanted the
+        // GpuTexture bookkeeping around it. Do not free that image here: it carries the
+        // label we passed and Blaze3D has already touched it on the command buffer that is
+        // currently recording, so destroying it inline invalidates that command buffer.
+        // Hand it to the frame op queue like any other resource Blaze3D still holds.
+        final long ownImage = vkImage;
+        final long ownAllocation = vmaAllocation;
         vkImage = source.vkImage();
         vmaAllocation = VK10.VK_NULL_HANDLE;
+        VanillaVulkanIntegration.addFrameOp(
+                () -> Vma.vmaDestroyImage(device.vma(), ownImage, ownAllocation));
 
         this.source = source; // move
     }

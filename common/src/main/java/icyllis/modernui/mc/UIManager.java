@@ -1045,9 +1045,10 @@ public abstract class UIManager implements LifecycleOwner {
                     VulkanModIntegration.addFrameOp(layer::unrefCommandBuffer);
                     mLastSubmittedVulkanLayer = layer;
                 } else {
-                    // Minecraft's own Vulkan backend, same shape as the OpenGL branch;
-                    // it keeps every image in VK_IMAGE_LAYOUT_GENERAL for its whole life,
-                    // so there is no layout to synchronize here
+                    // Minecraft's own Vulkan backend. It keeps every image in
+                    // VK_IMAGE_LAYOUT_GENERAL for its whole life, so there is no layout to
+                    // synchronize here, but unlike the OpenGL backend it does keep frames in
+                    // flight, so the layer has to be held for the command buffer as well.
                     if (mLayerTexture_VanillaVulkan == null || mLayerTexture_VanillaVulkan.source != layer) {
                         if (mLayerTexture_VanillaVulkan != null) {
                             mLayerTextureView_VanillaVulkan.close();
@@ -1061,6 +1062,10 @@ public abstract class UIManager implements LifecycleOwner {
                         // ensure there's ref before submitting to the GPU
                         mLayerTexture_VanillaVulkan.touch();
                     }
+                    // Blaze3D samples everything as VK_IMAGE_LAYOUT_GENERAL and tracks no
+                    // layouts of its own, so the layer has to arrive in that layout
+                    VanillaVulkanIntegration.syncImageLayoutToVanilla(layer);
+                    layer.refCommandBuffer();
                     gr.nextStratum();
                     MuiModApi.get().submitGuiElementRenderState(gr, new BlitRenderState(
                             // render target is always premultiplied
@@ -1073,6 +1078,7 @@ public abstract class UIManager implements LifecycleOwner {
                             ~0,
                             /*scissorArea*/ null
                     ));
+                    VanillaVulkanIntegration.addFrameOp(layer::unrefCommandBuffer);
                 }
             }
         }
@@ -1319,6 +1325,10 @@ public abstract class UIManager implements LifecycleOwner {
     public static void destroy() {
         // see onRenderTick() above
         LOGGER.debug(MARKER, "Quiting Modern UI");
+        // Blaze3D tears the device down without draining the queue we defer our own frame
+        // ops into, and whatever is left there is leaked past vkDestroyDevice. Run it here,
+        // while the device and its allocator are still alive.
+        VanillaVulkanIntegration.flushFrameOps();
         //BlurHandler.INSTANCE.closeEffect();
         FontResourceManager.getInstance().close();
         ImageStore.getInstance().clear();
